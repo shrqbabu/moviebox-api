@@ -1,0 +1,295 @@
+const { TelegramClient } = require("telegram");
+const { StringSession } = require("telegram/sessions");
+const { NewMessage } = require("telegram/events");
+
+class TelegramStreamEngine {
+  constructor() {
+    this.client = null;
+    this.isReady = false;
+    this.initPromise = null;
+    this.isListenerRegistered = false;
+  }
+
+  async init() {
+    // Agar client already connected hai toh direct return karo
+    if (this.isReady && this.client && this.client.connected) {
+      return this.client;
+    }
+
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = (async () => {
+      const apiId = parseInt(process.env.TG_API_ID || "0", 10);
+      const apiHash = (process.env.TG_API_HASH || "").trim();
+      const botToken = (process.env.TG_BOT_TOKEN || "").trim();
+      const sessionString = (process.env.TG_SESSION || "").trim();
+
+      if (!apiId || !apiHash || !botToken) {
+        throw new Error("Telegram credentials (TG_API_ID, TG_API_HASH, TG_BOT_TOKEN) missing in .env");
+      }
+
+      const stringSession = new StringSession(sessionString);
+      this.client = new TelegramClient(stringSession, apiId, apiHash, {
+        connectionRetries: 5,
+        useWSS: false,
+        timeout: 20000,
+        autoReconnect: true,
+      });
+
+      await this.client.start({
+        botAuthToken: botToken,
+      });
+
+      this.isReady = true;
+      console.log("🚀 [TelegramStream] Connected to Telegram Datacenter successfully!");
+
+      this.setupBotListener();
+
+      return this.client;
+    })();
+
+    try {
+      const client = await this.initPromise;
+      return client;
+    } catch (e) {
+      this.initPromise = null;
+      this.isReady = false;
+      throw e;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  setupBotListener() {
+    if (this.isListenerRegistered || !this.client) return;
+    this.isListenerRegistered = true;
+
+    this.client.addEventHandler(async (event) => {
+      try {
+        const message = event.message;
+        if (!message) return;
+
+        const text = (message.text || message.message || "").trim();
+        const hostUrl = (process.env.BASE_HOST_URL || "https://live.betadda.workers.dev").trimEnd("/");
+        const storageChannel = this.parseChannel(process.env.TG_CHANNEL_ID);
+
+        // 1. Video / File upload handling
+        const media = message.media?.document || message.media?.video;
+        if (media) {
+          let targetMsgId = message.id;
+
+          // FIX: Agar video private DM mein aayi hai, toh use Storage Channel mein forward karo
+          if (storageChannel) {
+            try {
+              const forwarded = await this.client.forwardMessages(storageChannel, {
+                messages: [message.id],
+                fromPeer: message.peerId,
+              });
+              if (forwarded && forwarded[0]) {
+                targetMsgId = forwarded[0].id;
+              }
+            } catch (fwdErr) {
+              console.warn("⚠️ Forward to storage channel failed, using original ID:", fwdErr.message);
+            }
+          }
+
+          const directUrl = `${hostUrl}/api/tg/stream?msg=${targetMsgId}`;
+          const hlsUrl = `${hostUrl}/api/movie/proxy.m3u8?url=${encodeURIComponent(directUrl)}`;
+
+          const replyText =
+            `🎬 **Video Stream Ready!**\n\n` +
+            `📡 **HLS M3U8 URL:**\n\`${hlsUrl}\`\n\n` +
+            `⚡ **Direct Stream (Fast Seek):**\n\`${directUrl}\`\n\n` +
+            `📋 **Stored Message ID:** \`${targetMsgId}\``;
+
+          await message.reply({ message: replyText });
+          return;
+        }
+
+        // 2. Direct external link handling
+        if (text.startsWith("http://") || text.startsWith("https://")) {
+          const hlsUrl = `${hostUrl}/api/movie/proxy.m3u8?url=${encodeURIComponent(text)}`;
+          const streamUrl = `${hostUrl}/api/movie/stream?url=${encodeURIComponent(text)}`;
+
+          const replyText =
+            `🎬 **Stream Link Generated!**\n\n` +
+            `📡 **HLS M3U8 Playlist:**\n\`${hlsUrl}\`\n\n` +
+            `⚡ **Direct Stream (Fast Seek):**\n\`${streamUrl}\``;
+
+          await message.reply({ message: replyText });
+          return;
+        }
+
+        // 3. /start command
+        if (text === "/start" || text === "/help") {
+          await message.reply({
+            message:
+              `👋 **Welcome to CineFlix Stream Generator Bot!**\n\n` +
+              `Send me any **Video File (.mp4 / .mkv)** or any **Direct Video Link**,\n` +
+              `and I will instantly generate a ready-to-play **M3U8 HLS & Direct Stream URL**! 🚀`
+          });
+        }
+      } catch (err) {
+        console.error("⚠️ [Telegram Bot Event Error]:", err.message);
+      }
+    }, new NewMessage({}));
+
+    console.log("🤖 [TelegramStream] Auto M3U8 Generator Bot Listener is active!");
+  }
+
+  parseChannel(channelInput) {
+    let raw = (channelInput || process.env.TG_CHANNEL_ID || "").trim();
+    if (!raw) return "";
+
+    if (raw.startsWith("#")) raw = raw.slice(1).trim();
+
+    if (/^-?\d+$/.test(raw)) {
+      if (raw.startsWith("-100")) return raw;
+      if (raw.startsWith("-")) return `-100${raw.slice(1)}`;
+      return `-100${raw}`;
+    }
+
+    return raw;
+  }
+
+  /**
+   * High-speed Telegram Video Streamer with 4KB Aligned HTTP 206 Support
+   */
+  async streamMedia(req, res, messageId, channelInput = "") {
+    try {
+      const client = await this.init();
+      const channel = this.parseChannel(channelInput);
+
+      if (!channel) {
+        return res.status(400).send("Telegram channel not specified");
+      }
+
+      const msgId = parseInt(messageId, 10);
+      if (!msgId || isNaN(msgId)) {
+        return res.status(400).send("Invalid Telegram message ID");
+      }
+
+      const messages = await client.getMessages(channel, { ids: [msgId] });
+      if (!messages || messages.length === 0 || !messages[0]) {
+        return res.status(404).send(`Message #${msgId} not found`);
+      }
+
+      const msg = messages[0];
+      const media = msg.media?.document || msg.media?.video || msg.media?.audio;
+      if (!media) {
+        return res.status(404).send("Message does not contain streamable media");
+      }
+
+      const fileSize = Number(media.size || 0);
+      let mimeType = media.mimeType || "video/mp4";
+      if (mimeType === "application/octet-stream") {
+        mimeType = "video/mp4"; // Player fallback
+      }
+
+      // Filename nikalna
+      let fileName = "video.mp4";
+      if (media.attributes) {
+        for (const attr of media.attributes) {
+          if (attr.fileName) {
+            fileName = attr.fileName;
+            break;
+          }
+        }
+      }
+
+      let start = 0;
+      let end = fileSize > 0 ? fileSize - 1 : 0;
+      let statusCode = 200;
+
+      const rangeHeader = req.headers.range;
+      if (rangeHeader && fileSize > 0) {
+        const parts = rangeHeader.replace(/bytes=/, "").split("-");
+        start = parseInt(parts[0], 10) || 0;
+        end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+        if (start > end || start >= fileSize) {
+          res.setHeader("Content-Range", `bytes */${fileSize}`);
+          return res.status(416).send("Requested Range Not Satisfiable");
+        }
+        statusCode = 206;
+      }
+
+      const chunkSize = fileSize > 0 ? end - start + 1 : undefined;
+
+      const headers = {
+        "Content-Type": mimeType,
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": `inline; filename="${encodeURIComponent(fileName)}"`,
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Type",
+        "Cache-Control": "public, max-age=86400",
+      };
+
+      if (statusCode === 206 && fileSize > 0) {
+        headers["Content-Range"] = `bytes ${start}-${end}/${fileSize}`;
+        headers["Content-Length"] = chunkSize;
+      } else if (fileSize > 0) {
+        headers["Content-Length"] = fileSize;
+      }
+
+      res.writeHead(statusCode, headers);
+
+      if (req.method === "HEAD") {
+        return res.end();
+      }
+
+      let isAborted = false;
+      req.on("close", () => {
+        isAborted = true;
+      });
+
+      // FIX: Telegram 4KB Boundary Alignment
+      // Telegram requires offset to be divisible by 4096 (4KB)
+      const ALIGNMENT = 4096;
+      const alignedStart = Math.floor(start / ALIGNMENT) * ALIGNMENT;
+      let bytesToSkip = start - alignedStart;
+      const alignedLimit = chunkSize ? chunkSize + bytesToSkip : undefined;
+
+      const iter = client.iterDownload({
+        file: media,
+        offset: BigInt(alignedStart),
+        limit: alignedLimit,
+        chunkSize: 512 * 1024,   // 512 KB
+        requestSize: 512 * 1024,
+        workers: 2,              // Parallel workers for fast streaming
+      });
+
+      for await (const chunk of iter) {
+        if (isAborted || res.writableEnded) break;
+
+        // Skip leading misaligned bytes for exact range matching
+        if (bytesToSkip > 0) {
+          if (chunk.length <= bytesToSkip) {
+            bytesToSkip -= chunk.length;
+            continue;
+          } else {
+            const slicedChunk = chunk.slice(bytesToSkip);
+            bytesToSkip = 0;
+            res.write(slicedChunk);
+            continue;
+          }
+        }
+
+        res.write(chunk);
+      }
+
+      if (!res.writableEnded) {
+        res.end();
+      }
+    } catch (err) {
+      console.error("⚠️ [TelegramStream Error]:", err.message);
+      if (!res.headersSent) {
+        return res.status(500).send(`Telegram stream error: ${err.message}`);
+      }
+    }
+  }
+}
+
+module.exports = new TelegramStreamEngine();

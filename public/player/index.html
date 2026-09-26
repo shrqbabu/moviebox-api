@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>CineFlix OTT - Telegram Mini App</title>
+
+  <!-- Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <!-- HLS.js for M3U8 streams with HEVC (hvc1/hev1) & fMP4 support -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+  <!-- Dash.js for MPEG-DASH (.mpd) streams -->
+  <script src="https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js"></script>
+
+  <!-- Google Fonts: JetBrains Mono & Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="tma-app">
+
+    <!-- Main Player Container (Flush Top Zero-Space Layout) -->
+    <main class="player-wrapper">
+      <div id="exo-player-container" class="exo-container resize-fit">
+
+        <!-- Video Element (Instant Autoplay) -->
+        <video id="exo-video" playsinline webkit-playsinline x5-playsinline autoplay preload="auto" crossorigin="anonymous"></video>
+
+        <!-- Touch Gesture Layers (Left = Brightness, Right = Volume, Center = Double Tap) -->
+        <div class="gesture-layer">
+          <div id="gesture-left" class="gesture-zone">
+            <div class="double-tap-feedback" id="rewind-feedback">
+              <svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
+              <span>-10s</span>
+            </div>
+          </div>
+          <div id="gesture-center" class="gesture-zone"></div>
+          <div id="gesture-right" class="gesture-zone">
+            <div class="double-tap-feedback" id="forward-feedback">
+              <svg viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg>
+              <span>+10s</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gesture HUD Indicators (Brightness & Volume on Swipe) -->
+        <div id="gesture-hud" class="gesture-hud">
+          <div class="hud-icon" id="hud-icon"></div>
+          <div class="hud-bar"><div id="hud-level" class="hud-level"></div></div>
+          <span id="hud-text" class="hud-text">50%</span>
+        </div>
+
+        <!-- Buffer Spinner / Loading Indicator -->
+        <div id="exo-buffering" class="exo-buffering">
+          <div class="exo-spinner"></div>
+          <span class="buffering-text">CineFlix Loading...</span>
+        </div>
+
+        <!-- Resume Playback OTT Banner Overlay -->
+        <div id="resume-overlay" class="resume-overlay hidden">
+          <div class="resume-card">
+            <div class="resume-info">
+              <svg class="resume-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+              <div class="resume-text-wrap">
+                <span class="resume-tag">CONTINUE WATCHING</span>
+                <p class="resume-message">Resume from <b id="resume-timestamp">00:00</b>?</p>
+              </div>
+            </div>
+            <div class="resume-actions">
+              <button id="btn-resume-play" class="resume-btn primary">
+                <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                <span>Resume</span>
+              </button>
+              <button id="btn-resume-restart" class="resume-btn secondary">
+                <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+                <span>Start Over</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Error Notice Overlay -->
+        <div id="error-overlay" class="error-overlay hidden">
+          <div class="error-card">
+            <svg class="error-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            <h4 id="error-title">Stream Playback Failed</h4>
+            <p id="error-message">Unable to load the media stream. Check connection or format.</p>
+            <div class="error-btns">
+              <button id="btn-retry-stream" class="error-btn-primary">Retry</button>
+              <button id="btn-dismiss-error" class="error-btn-secondary">Dismiss</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lock Indicator Overlay -->
+        <div id="lock-overlay" class="lock-overlay hidden">
+          <button id="btn-unlock" class="unlock-btn">
+            <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+            <span>Screen Locked (Tap to Unlock)</span>
+          </button>
+        </div>
+
+        <!-- ExoPlayer UI Controls Overlay -->
+        <div id="exo-controls" class="exo-controls-overlay">
+
+          <!-- Top Controls Bar inside Video -->
+          <div class="controls-top">
+            <div class="video-info">
+              <button id="btn-fs-back" class="ctrl-btn hidden" title="Exit Fullscreen / Back">
+                <svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+              </button>
+              <span id="video-stream-badge" class="badge-codec">HD</span>
+              <span id="video-resolution-badge" class="badge-res">1080p</span>
+            </div>
+            <div class="top-actions">
+              <!-- Resize Mode (Fit, Zoom, Stretch) -->
+              <button id="btn-resize-mode" class="ctrl-btn" title="Aspect Ratio Mode">
+                <svg viewBox="0 0 24 24"><path d="M15 3l2.3 2.3-2.89 2.87 1.42 1.42L18.7 6.7 21 9V3h-6zM3 9l2.3-2.3 2.87 2.89 1.42-1.42L6.7 5.3 9 3H3v6zm6 12l-2.3-2.3 2.89-2.87-1.42-1.42L5.3 17.3 3 15v6h6zm12-6l-2.3 2.3-2.87-2.89-1.42 1.42 2.89 2.87L15 21h6v-6z"/></svg>
+              </button>
+              <!-- Lock Screen Touch -->
+              <button id="btn-lock" class="ctrl-btn" title="Lock Screen">
+                <svg viewBox="0 0 24 24"><path d="M12 17c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm6-9h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h1.9c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm0 12H6V10h12v10z"/></svg>
+              </button>
+              <!-- Stream Diagnostics -->
+              <button id="btn-stats" class="ctrl-btn" title="Stream Diagnostics">
+                <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+              </button>
+              <!-- Settings Menu Trigger (Quality, Audio, Subtitles, Speed) -->
+              <button id="btn-settings" class="ctrl-btn" title="Quality & Settings">
+                <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Center Controls (Rewind 10s, Big Play/Pause, Forward 10s) -->
+          <div class="controls-center">
+            <button id="btn-rewind" class="center-btn" title="Rewind 10s">
+              <svg viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.22 3.16-1.98 5.12-1.98 3.53 0 6.51 2.39 7.42 5.65l1.9-.62C20.66 11.23 16.95 8 12.5 8z"/><text x="12" y="15" font-size="6" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
+            </button>
+            <button id="btn-play-pause" class="center-play-btn" title="Play/Pause">
+              <svg id="icon-play" class="icon-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+              <svg id="icon-pause" class="icon-pause hidden" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+            </button>
+            <button id="btn-forward" class="center-btn" title="Fast Forward 10s">
+              <svg viewBox="0 0 24 24"><path d="M11.5 8c2.65 0 5.05.99 6.9 2.6L22 7v9h-9l3.62-3.62c-1.39-1.22-3.16-1.98-5.12-1.98-3.53 0-6.51 2.39-7.42 5.65l-1.9-.62C3.34 11.23 7.05 8 11.5 8z"/><text x="12" y="15" font-size="6" font-weight="bold" text-anchor="middle" fill="currentColor">10</text></svg>
+            </button>
+          </div>
+
+          <!-- Bottom Controls (Scrub Bar, Time, Audio/Sub, Fullscreen, PiP) -->
+          <div class="controls-bottom">
+
+            <!-- Time Scrub Bar -->
+            <div class="scrub-container">
+              <div id="scrub-bar" class="scrub-bar">
+                <div id="scrub-buffered" class="scrub-buffered"></div>
+                <div id="scrub-progress" class="scrub-progress"></div>
+                <div id="scrub-handle" class="scrub-handle"></div>
+              </div>
+              <div id="scrub-time-tooltip" class="scrub-tooltip">00:00</div>
+            </div>
+
+            <!-- Bottom Action Row -->
+            <div class="bottom-actions">
+              <div class="actions-left">
+                <button id="btn-play-mini" class="mini-ctrl-btn">
+                  <svg id="icon-play-mini" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                  <svg id="icon-pause-mini" class="hidden" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                </button>
+                <div class="time-display">
+                  <span id="time-current">00:00</span>
+                  <span class="time-divider">/</span>
+                  <span id="time-duration">00:00</span>
+                  <span id="live-indicator" class="live-tag hidden">LIVE</span>
+                </div>
+              </div>
+
+              <div class="actions-right">
+                <!-- Audio Tracks -->
+                <button id="btn-audio-tracks" class="mini-ctrl-btn" title="Audio Tracks">
+                  <svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+                </button>
+                <!-- Subtitles / CC -->
+                <button id="btn-subtitles" class="mini-ctrl-btn" title="Subtitles & Closed Captions">
+                  <svg viewBox="0 0 24 24"><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/></svg>
+                </button>
+                <!-- Picture in Picture -->
+                <button id="btn-pip" class="mini-ctrl-btn" title="Picture in Picture">
+                  <svg viewBox="0 0 24 24"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 1.98 2 1.98h18c1.1 0 2-.88 2-1.98V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
+                </button>
+                <!-- Fullscreen -->
+                <button id="btn-fullscreen" class="mini-ctrl-btn" title="Fullscreen">
+                  <svg id="icon-fs-enter" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                  <svg id="icon-fs-exit" class="hidden" viewBox="0 0 24 24"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-14v3h3v2h-5V5h2z"/></svg>
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Quick Settings Modal Overlay (OTT Style Bottom Sheet) -->
+        <div id="modal-settings" class="modal-sheet hidden">
+          <div class="modal-backdrop"></div>
+          <div class="modal-card">
+            <div class="modal-header">
+              <div class="modal-drag-handle"></div>
+              <h3 id="modal-title">Playback Settings</h3>
+              <button class="modal-close-btn" id="btn-close-modal">&times;</button>
+            </div>
+            <div class="modal-content" id="modal-content-main">
+              <!-- Main Settings Menu -->
+              <div class="settings-list">
+                <div class="settings-item" data-menu="quality">
+                  <div class="item-left">
+                    <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-1.41-1.41L13.17 14H8v-2h5.17l-2.58-2.59L12 8l5 5z"/></svg>
+                    <span>Stream Quality</span>
+                  </div>
+                  <div class="item-right">
+                    <span id="current-quality-label">Auto (1080p)</span>
+                    <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                  </div>
+                </div>
+
+                <div class="settings-item" data-menu="audio">
+                  <div class="item-left">
+                    <svg viewBox="0 0 24 24"><path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/></svg>
+                    <span>Audio Track</span>
+                  </div>
+                  <div class="item-right">
+                    <span id="current-audio-label">Hindi / Default</span>
+                    <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                  </div>
+                </div>
+
+                <div class="settings-item" data-menu="subtitles">
+                  <div class="item-left">
+                    <svg viewBox="0 0 24 24"><path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/></svg>
+                    <span>Subtitles / CC</span>
+                  </div>
+                  <div class="item-right">
+                    <span id="current-subtitles-label">Off</span>
+                    <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                  </div>
+                </div>
+
+                <div class="settings-item" data-menu="speed">
+                  <div class="item-left">
+                    <svg viewBox="0 0 24 24"><path d="M20.38 8.57l-1.23 1.85a8 8 0 0 1-.22 7.58H5.07A8 8 0 0 1 15.58 6.85l1.85-1.23A10 10 0 0 0 3.35 19a2 2 0 0 0 1.72 1h13.85a2 2 0 0 0 1.74-1 10 10 0 0 0-.27-10.43zM10.59 15.41a2 2 0 0 0 2.83 0l5.66-8.49-8.49 5.66a2 2 0 0 0 0 2.83z"/></svg>
+                    <span>Playback Speed</span>
+                  </div>
+                  <div class="item-right">
+                    <span id="current-speed-label">Normal (1x)</span>
+                    <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                  </div>
+                </div>
+
+                <div class="settings-item" data-menu="aspect">
+                  <div class="item-left">
+                    <svg viewBox="0 0 24 24"><path d="M19 4H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H5V6h14v12z"/></svg>
+                    <span>Resize Mode (Aspect Ratio)</span>
+                  </div>
+                  <div class="item-right">
+                    <span id="current-aspect-label">Fit</span>
+                    <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                  </div>
+                </div>
+
+                <div class="settings-item" data-menu="haptic">
+                  <div class="item-left">
+                    <svg viewBox="0 0 24 24"><path d="M0 15h2V9H0v6zm3 2h2V7H3v10zm19-8v6h2V9h-2zm-3 8h2V7h-2v10zM16.5 3h-9C6.67 3 6 3.67 6 4.5v15c0 .83.67 1.5 1.5 1.5h9c.83 0 1.5-.67 1.5-1.5v-15c0-.83-.67-1.5-1.5-1.5zM16 19H8V5h8v14z"/></svg>
+                    <span>Telegram Haptic Feedback</span>
+                  </div>
+                  <div class="item-right">
+                    <input type="checkbox" id="toggle-haptics" checked>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Submenu Container -->
+            <div class="modal-content hidden" id="modal-content-sub">
+              <button class="submenu-back" id="btn-sub-back">
+                <svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                <span id="sub-title">Options</span>
+              </button>
+              <div class="options-list" id="sub-options-list"></div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Stats Diagnostics Overlay -->
+        <div id="stats-overlay" class="stats-card hidden">
+          <div class="stats-header">
+            <h4>CineFlix Diagnostics</h4>
+            <button id="btn-close-stats">&times;</button>
+          </div>
+          <div class="stats-body">
+            <div class="stat-row"><span>Engine:</span><b id="stat-engine">HLS.js / Hardware</b></div>
+            <div class="stat-row"><span>Codec:</span><b id="stat-codec">HEVC / H.265 (hvc1)</b></div>
+            <div class="stat-row"><span>Resolution:</span><b id="stat-res">1920x1080</b></div>
+            <div class="stat-row"><span>Bitrate:</span><b id="stat-bitrate">-</b></div>
+            <div class="stat-row"><span>Buffer Length:</span><b id="stat-buffer">0.0 s</b></div>
+            <div class="stat-row"><span>Dropped Frames:</span><b id="stat-dropped">0</b></div>
+            <div class="stat-row"><span>Telegram WebApp:</span><b id="stat-tg-version">v7.0+</b></div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- OTT Movie Rich Cinema Metadata Section (Netflix & Prime Style) -->
+    <section class="ott-info-section">
+      <div class="ott-info-card">
+        <!-- Hero Title Row with Badges -->
+        <div class="ott-hero-row">
+          <div class="ott-poster-wrap" id="ott-poster-wrap">
+            <img id="ott-poster-img" src="" alt="Poster" class="ott-poster-img hidden">
+            <div class="ott-poster-placeholder" id="ott-poster-placeholder">
+              <svg viewBox="0 0 24 24"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/></svg>
+            </div>
+          </div>
+
+          <div class="ott-title-details">
+            <div class="ott-badge-list">
+              <span class="ott-chip badge-red">⚡ 4K ULTRA HD</span>
+              <span class="ott-chip badge-blue" id="ott-badge-codec">HEVC H.265</span>
+              <span class="ott-chip badge-green" id="ott-badge-audio">DOLBY 5.1</span>
+              <span class="ott-chip badge-gold" id="ott-badge-rating">⭐ 8.5/10</span>
+            </div>
+
+            <h2 id="ott-movie-title" class="ott-movie-title">Movie Title</h2>
+
+            <div class="ott-meta-subline">
+              <span id="ott-movie-year">2024</span>
+              <span class="meta-dot">•</span>
+              <span id="ott-movie-duration">2h 15m</span>
+              <span class="meta-dot">•</span>
+              <span id="ott-movie-cert">U/A 16+</span>
+              <span class="meta-dot">•</span>
+              <span id="ott-movie-lang">Hindi Dubbed</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Genres Tags / Pills -->
+        <div class="ott-genre-pills" id="ott-genre-list">
+          <span class="genre-pill">Action</span>
+          <span class="genre-pill">Sci-Fi</span>
+          <span class="genre-pill">Adventure</span>
+        </div>
+
+        <!-- Storyline & Plot Section -->
+        <div class="ott-synopsis-box">
+          <div class="synopsis-header">
+            <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+            <h3>Storyline & Plot</h3>
+          </div>
+          <p id="ott-movie-plot" class="ott-movie-plot">Streaming in high definition with hardware accelerated decoding, cinema audio tracks, and smart resume playback.</p>
+        </div>
+
+        <!-- Cast & Crew Info -->
+        <div class="ott-cast-box" id="ott-cast-box">
+          <div class="cast-row">
+            <span class="cast-label">Starring:</span>
+            <span class="cast-value" id="ott-movie-cast">Popular Cast</span>
+          </div>
+        </div>
+
+        <!-- Streaming Highlights / Feature Grid -->
+        <div class="ott-features-grid">
+          <div class="feature-item">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            <span>Resume Memory Active</span>
+          </div>
+          <div class="feature-item">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            <span>Touch Gestures (Seek/Volume)</span>
+          </div>
+          <div class="feature-item">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            <span>Cloudflare Fast CDN</span>
+          </div>
+          <div class="feature-item">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            <span>Ad-Free Pure Stream</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Toast Notification Overlay -->
+    <div id="exo-toast" class="exo-toast hidden"></div>
+
+  </div>
+
+  <script src="player.js"></script>
+</body>
+</html>

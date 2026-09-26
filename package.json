@@ -1,0 +1,32 @@
+{
+  "name": "moviebox-node",
+  "version": "1.0.0",
+  "description": "Node.js SDK, REST API and Web Player reverse-engineered from MovieBox-Tui",
+  "main": "src/index.js",
+  "bin": {
+    "moviebox": "./bin/cli.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "cli": "node bin/cli.js",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "moviebox",
+    "moviebox-tui",
+    "streaming",
+    "movies",
+    "dash",
+    "hls"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "big-integer": "^1.6.52",
+    "telegram": "^2.26.22"
+  }
+}

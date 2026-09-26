@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MovieBox Admin Stream Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dashjs@latest/dist/dash.all.min.js"></script>
+</head>
+<body>
+  <!-- Admin PIN Lock Overlay -->
+  <div id="adminLockOverlay" class="admin-lock-overlay">
+    <div class="admin-lock-card">
+      <div class="admin-lock-icon">🔒</div>
+      <h2>Admin Portal Locked</h2>
+      <p>Enter Master Admin PIN to unlock the streaming server and dashboard.</p>
+      <div class="admin-pin-group">
+        <input type="password" id="adminPinInput" placeholder="Enter Admin PIN..." autocomplete="off" />
+        <button id="adminPinBtn" class="btn btn-primary" onclick="submitAdminPin()">Unlock</button>
+      </div>
+      <p id="adminPinError" class="admin-pin-error"></p>
+      <div class="admin-lock-footer">Protected by CineFlix Security Shield 🛡️</div>
+    </div>
+  </div>
+
+  <div class="app-container" id="appContainer" style="display: none;">
+    <!-- Navigation Header -->
+    <header class="navbar">
+      <div class="nav-brand">
+        <span class="brand-icon">🎬</span>
+        <span class="brand-title">MovieBox <span class="brand-badge">Admin 🔒</span></span>
+      </div>
+
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="Search Movies, Anime, TV Shows (Hindi Dubs)..." />
+        <button id="searchBtn" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          Search
+        </button>
+      </div>
+
+      <div class="nav-actions" style="display: flex; align-items: center; gap: 12px;">
+        <div class="nav-status">
+          <span class="status-dot"></span>
+          <span id="statusText">Secured Engine</span>
+        </div>
+        <button class="btn btn-secondary btn-lock-portal" onclick="lockAdminPortal()" title="Lock Admin Portal">
+          🔒 Lock
+        </button>
+      </div>
+    </header>
+
+    <!-- Filters Bar -->
+    <div class="filters-bar">
+      <div class="filter-group">
+        <button class="filter-btn active" data-type="0">All</button>
+        <button class="filter-btn" data-type="1">Movies</button>
+        <button class="filter-btn" data-type="2">TV Series</button>
+      </div>
+      <div class="quick-tags">
+        <span class="tag" onclick="quickSearch('Avengers')">Avengers</span>
+        <span class="tag" onclick="quickSearch('Batman')">Batman</span>
+        <span class="tag" onclick="quickSearch('Interstellar')">Interstellar</span>
+        <span class="tag" onclick="quickSearch('Breaking Bad')">Breaking Bad</span>
+        <span class="tag" onclick="quickSearch('Spider-Man')">Spider-Man</span>
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <div id="loading" class="loading-spinner" style="display: none;">
+        <div class="spinner"></div>
+        <p>Fetching catalog & stream metadata...</p>
+      </div>
+
+      <div id="resultsInfo" class="results-info" style="display: none;">
+        <h2 id="resultsHeading">Search Results</h2>
+        <span id="resultsCount" class="badge">0 items</span>
+      </div>
+
+      <div id="catalogGrid" class="catalog-grid">
+        <!-- Cards injected dynamically -->
+      </div>
+    </main>
+
+    <!-- Details Modal -->
+    <div id="detailsModal" class="modal">
+      <div class="modal-backdrop" onclick="closeDetailsModal()"></div>
+      <div class="modal-card">
+        <button class="modal-close" onclick="closeDetailsModal()">&times;</button>
+        <div class="modal-body" id="modalBody">
+          <!-- Dynamic details content -->
+        </div>
+      </div>
+    </div>
+
+    <!-- 🎬 Built-in Theater Video Player Modal -->
+    <div id="videoModal" class="modal">
+      <div class="modal-backdrop" onclick="closeVideoModal()"></div>
+      <div class="modal-card video-player-card">
+        <button class="modal-close" onclick="closeVideoModal()">&times;</button>
+        <div class="modal-body video-player-modal-body">
+          <div class="video-player-header">
+            <div class="video-player-titles">
+              <h2 id="videoPlayerTitle">Movie Title</h2>
+              <div id="videoPlayerMeta" class="player-meta-badges"></div>
+            </div>
+            <div class="video-engine-indicator" id="videoEngineIndicator">
+              <span class="status-dot"></span> <span id="videoEngineText">HLS Adaptive</span>
+            </div>
+          </div>
+
+          <div class="video-screen-wrap">
+            <video id="mainVideoPlayer" controls playsinline preload="auto"></video>
+            <div id="videoOverlayLoading" class="video-overlay-loading hidden">
+              <div class="spinner"></div>
+              <p id="videoOverlayLoadingText">Buffering Video Stream...</p>
+            </div>
+          </div>
+
+          <div class="video-controls-toolbar">
+            <div class="video-toolbar-left" id="videoEpisodeControls" style="display: none;">
+              <button class="btn btn-secondary btn-sm" id="btnPrevEp" onclick="navigateEpisode(-1)">⏮ Prev Ep</button>
+              <span id="currentEpLabel" class="meta-pill">S1 E1</span>
+              <button class="btn btn-secondary btn-sm" id="btnNextEp" onclick="navigateEpisode(1)">Next Ep ⏭</button>
+            </div>
+            <div class="video-toolbar-right">
+              <select id="playerDubSelect" class="select-input select-sm" onchange="onPlayerDubChange(this.value)" style="display: none;"></select>
+            </div>
+          </div>
+
+          <div class="video-external-actions">
+            <a class="btn btn-launch-mx btn-sm" id="playerMxBtn" href="#" target="_blank">🎬 MX Player</a>
+            <a class="btn btn-launch-vlc btn-sm" id="playerVlcBtn" href="#" target="_blank">🍿 VLC Player</a>
+            <button class="btn btn-secondary btn-sm" onclick="copyActiveStreamUrl()">📋 Copy Stream Link</button>
+            <a class="btn btn-secondary btn-sm" id="playerM3uBtn" href="#" target="_blank">📥 .M3U Playlist</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stream Launch Hub Modal -->
+    <div id="streamModal" class="modal">
+      <div class="modal-backdrop" onclick="closeStreamModal()"></div>
+      <div class="modal-card stream-card">
+        <button class="modal-close" onclick="closeStreamModal()">&times;</button>
+        <div class="modal-body">
+          <div class="stream-header">
+            <h2 id="streamTitle">Stream Sources & Launcher</h2>
+            <div id="streamMeta" class="player-meta-badges"></div>
+          </div>
+
+          <div id="streamControls" class="stream-controls">
+            <!-- Stream options & commands -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast">Action completed!</div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
